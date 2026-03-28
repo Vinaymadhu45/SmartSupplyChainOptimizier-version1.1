@@ -8,12 +8,20 @@ import { Observable, catchError, of, throwError, tap } from 'rxjs';
 export class ApiService {
   private baseUrl = 'http://localhost:8080/api';
 
-  // Simple caches
   private productsCache: any[] = [];
   private warehousesCache: any[] = [];
   private ordersCache: any[] = [];
+  private analyticsCache: any = null;
 
   constructor(private http: HttpClient) { }
+
+  getAnalytics(): Observable<any> {
+    if (this.analyticsCache) return of(this.analyticsCache);
+    return this.http.get<any>(`${this.baseUrl}/analytics/summary`).pipe(
+      tap(res => this.analyticsCache = res),
+      catchError(err => throwError(() => err))
+    );
+  }
 
   getProducts(): Observable<any[]> {
     if (this.productsCache.length > 0) return of(this.productsCache);
@@ -23,7 +31,6 @@ export class ApiService {
     );
   }
 
-  // Not cached because it's dynamic
   searchProducts(name: string): Observable<any[]> {
     return this.http.get<any[]>(`${this.baseUrl}/products/search?name=${name}`).pipe(
       catchError(err => throwError(() => err))
@@ -32,7 +39,12 @@ export class ApiService {
 
   addProduct(product: any): Observable<any> {
     return this.http.post<any>(`${this.baseUrl}/products`, product).pipe(
-      tap(() => this.productsCache = []), // invalidate
+      tap(res => {
+        if (this.productsCache.length > 0) {
+            this.productsCache.push(res);
+        }
+        this.analyticsCache = null; 
+      }),
       catchError(err => throwError(() => err))
     );
   }
@@ -47,7 +59,11 @@ export class ApiService {
 
   addWarehouse(warehouse: any): Observable<any> {
     return this.http.post<any>(`${this.baseUrl}/warehouses`, warehouse).pipe(
-      tap(() => this.warehousesCache = []), // invalidate
+      tap(res => {
+        if (this.warehousesCache.length > 0) {
+            this.warehousesCache.push(res);
+        }
+      }),
       catchError(err => throwError(() => err))
     );
   }
@@ -62,21 +78,29 @@ export class ApiService {
 
   addOrder(order: any): Observable<any> {
     return this.http.post<any>(`${this.baseUrl}/orders`, order).pipe(
-      tap(() => this.ordersCache = []), // invalidate
+      tap(res => {
+        if (this.ordersCache.length > 0) {
+            this.ordersCache.push(res);
+        }
+        this.analyticsCache = null;
+      }),
       catchError(err => throwError(() => err))
     );
   }
 
   updateOrderStatus(id: number, status: string): Observable<any> {
     return this.http.put<any>(`${this.baseUrl}/orders/${id}/status?status=${status}`, {}).pipe(
-      tap(() => this.ordersCache = []), // invalidate
+      tap(res => {
+        const idx = this.ordersCache.findIndex(o => o.id === id);
+        if (idx !== -1) {
+          this.ordersCache[idx] = res;
+        }
+      }),
       catchError(err => throwError(() => err))
     );
   }
 
   getRouteOptimization(): Observable<any[]> {
-    // Return warehouse cache if possible to save network trip - mock equivalent logic
-    if (this.warehousesCache.length > 0) return of(this.warehousesCache);
     return this.http.get<any[]>(`${this.baseUrl}/optimization/route`).pipe(
       catchError(err => throwError(() => err))
     );

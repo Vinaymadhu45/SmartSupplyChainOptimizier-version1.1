@@ -7,23 +7,20 @@ import com.supplychain.repository.OrderRepository;
 import com.supplychain.repository.ProductRepository;
 import com.supplychain.repository.WarehouseRepository;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 
 @RestController
 @RequestMapping("/api")
+@CrossOrigin(origins = "*")
 public class SupplyChainController {
 
     private final ProductRepository productRepository;
     private final WarehouseRepository warehouseRepository;
     private final OrderRepository orderRepository;
-
-    // Cache computed forecast values to avoid recalculating on every request
-    private final Map<Long, Double> forecastCache = new ConcurrentHashMap<>();
 
     public SupplyChainController(ProductRepository productRepository, 
                                  WarehouseRepository warehouseRepository, 
@@ -33,26 +30,49 @@ public class SupplyChainController {
         this.orderRepository = orderRepository;
     }
 
-    // 1. Products
+    @GetMapping("/analytics/summary")
+    public Map<String, Object> getAnalyticsSummary() {
+        Map<String, Object> summary = new HashMap<>();
+        long tP = productRepository.count();
+        long tO = orderRepository.count();
+        Double tR = orderRepository.getTotalRevenue();
+        String topProduct = "N/A";
+        try {
+            String p = orderRepository.getTopProductName();
+            if (p != null && !p.trim().isEmpty()) topProduct = p;
+        } catch(Exception e) { }
+        
+        summary.put("totalProducts", tP);
+        summary.put("totalOrders", tO);
+        summary.put("totalRevenue", tR != null ? tR : 0.0);
+        summary.put("topProduct", topProduct);
+        return summary;
+    }
+
     @GetMapping("/products")
     public List<Product> getProducts() {
-        return productRepository.findAll();
+        List<Product> list = productRepository.findAll();
+        return list == null ? new ArrayList<>() : list;
     }
 
     @PostMapping("/products")
     public Product addProduct(@Valid @RequestBody Product product) {
+        if (productRepository.existsByNameIgnoreCase(product.getName())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate product detected");
+        }
         return productRepository.save(product);
     }
 
     @GetMapping("/products/search")
     public List<Product> searchProducts(@RequestParam String name) {
-        return productRepository.findByNameContainingIgnoreCase(name);
+        List<Product> list = productRepository.findByNameContainingIgnoreCase(name);
+        return list == null ? new ArrayList<>() : list;
     }
 
-    // 2. Warehouses
     @GetMapping("/warehouses")
     public List<Warehouse> getWarehouses() {
-        return warehouseRepository.findAll();
+        List<Warehouse> list = warehouseRepository.findAll();
+        return list == null ? new ArrayList<>() : list;
     }
 
     @PostMapping("/warehouses")
@@ -60,10 +80,10 @@ public class SupplyChainController {
         return warehouseRepository.save(warehouse);
     }
 
-    // 3. Orders
     @GetMapping("/orders")
     public List<Order> getOrders() {
-        return orderRepository.findAll();
+        List<Order> list = orderRepository.findAll();
+        return list == null ? new ArrayList<>() : list;
     }
 
     @PostMapping("/orders")
@@ -71,7 +91,10 @@ public class SupplyChainController {
         if (order.getStatus() == null || order.getStatus().trim().isEmpty()) {
             order.setStatus("PENDING");
         }
-        forecastCache.clear(); // Wipe cache to refresh calculation
+        if (orderRepository.existsByCustomerNameAndProductIdAndQuantityAndStatus(
+                order.getCustomerName(), order.getProductId(), order.getQuantity(), order.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate Order matched");
+        }
         return orderRepository.save(order);
     }
 
@@ -79,35 +102,130 @@ public class SupplyChainController {
     public Order updateOrderStatus(@PathVariable Long id, @RequestParam String status) {
         Order order = orderRepository.findById(id).orElseThrow();
         order.setStatus(status);
-        forecastCache.clear(); // Wipe cache to refresh calculation
         return orderRepository.save(order);
     }
 
-    // 4. Optimization
+    static class Edge {
+        Long targetId;
+        double weight;
+        public Edge(Long t, double w) { this.targetId = t; this.weight = w; }
+    }
+
+    static class NodeDist implements Comparable<NodeDist> {
+        Long id;
+        double dist;
+        public NodeDist(Long i, double d) { this.id = i; this.dist = d; }
+        public int compareTo(NodeDist other) { return Double.compare(this.dist, other.dist); }
+    }
+
     @GetMapping("/optimization/route")
     public List<Warehouse> getRouteOptimization() {
-        return warehouseRepository.findAll(); // mock response referencing existing logic
+        List<Warehouse> all = warehouseRepository.findAll();
+        if (all == null || all.isEmpty()) return new ArrayList<>();
+        if (all.size() == 1) return all;
+
+        try {
+            Map<Long, List<Edge>> adjList = new HashMap<>();
+            Map<Long, Warehouse> wMap = new HashMap<>();
+            for (Warehouse w : all) {
+                adjList.put(w.getId(), new ArrayList<>());
+                wMap.put(w.getId(), w);
+            }
+            
+            for (int i=0; i<all.size(); i++) {
+                for (int j=0; j<all.size(); j++) {
+                    if (i != j) {
+                        Warehouse w1 = all.get(i);
+                        Warehouse w2 = all.get(j);
+                        double dist = Math.sqrt(Math.pow(w1.getLatitude()-w2.getLatitude(),2) + Math.pow(w1.getLongitude()-w2.getLongitude(),2));
+                        adjList.get(w1.getId()).add(new Edge(w2.getId(), dist));
+                    }
+                }
+            }
+
+            Warehouse startNode = all.get(0);
+            Warehouse endNode = all.get(all.size() - 1);
+            
+            PriorityQueue<NodeDist> pq = new PriorityQueue<>();
+            Map<Long, Double> distances = new HashMap<>();
+            Map<Long, Long> previous = new HashMap<>();
+            
+            for (Warehouse w : all) {
+                distances.put(w.getId(), Double.MAX_VALUE);
+            }
+            
+            distances.put(startNode.getId(), 0.0);
+            pq.add(new NodeDist(startNode.getId(), 0.0));
+            
+            while (!pq.isEmpty()) {
+                NodeDist current = pq.poll();
+                
+                if (current.id.equals(endNode.getId())) break;
+                
+                if (current.dist > distances.get(current.id)) continue;
+                
+                for (Edge edge : adjList.get(current.id)) {
+                    double newDist = distances.get(current.id) + edge.weight;
+                    if (newDist < distances.get(edge.targetId)) {
+                        distances.put(edge.targetId, newDist);
+                        previous.put(edge.targetId, current.id);
+                        pq.add(new NodeDist(edge.targetId, newDist));
+                    }
+                }
+            }
+            
+            List<Warehouse> path = new ArrayList<>();
+            Long curr = endNode.getId();
+            while (curr != null) {
+                path.add(wMap.get(curr));
+                curr = previous.get(curr);
+            }
+            Collections.reverse(path);
+            
+            if (path.isEmpty() || !path.get(0).getId().equals(startNode.getId())) return all;
+            
+            return path;
+        } catch(Exception e) {
+            return all;
+        }
     }
 
     @GetMapping("/optimization/forecast")
     public Map<String, Object> getForecast(@RequestParam(required = false) Long productId) {
-        Long cacheKey = productId != null ? productId : -1L;
-        
-        // Return from cache if present to prevent heavy math/db queries
-        if (!forecastCache.containsKey(cacheKey)) {
-            Double avg;
-            if (productId != null) {
-                avg = orderRepository.getAverageQuantityByProductId(productId);
-            } else {
-                avg = orderRepository.getGlobalAverageQuantity();
-            }
-            if (avg == null) avg = 120.0; // mock default if zero orders match
-            forecastCache.put(cacheKey, avg);
+        List<Order> recentOrders;
+        if (productId != null) {
+            recentOrders = orderRepository.findTop10ByProductIdOrderByIdDesc(productId);
+        } else {
+            recentOrders = orderRepository.findTop10ByOrderByIdDesc();
         }
-
-        Map<String, Object> forecast = new HashMap<>();
-        forecast.put("productId", cacheKey == -1L ? 1 : cacheKey); // fallback format compatibility
-        forecast.put("forecastedDemand", forecastCache.get(cacheKey));
-        return forecast;
+        
+        double forecast = 0.0;
+        String trend = "stable";
+        
+        if (recentOrders != null && !recentOrders.isEmpty()) {
+            double sum = 0;
+            for (Order o : recentOrders) sum += o.getQuantity();
+            forecast = sum / recentOrders.size();
+            
+            if (recentOrders.size() >= 4) {
+                double newestHalfSum = 0;
+                double oldestHalfSum = 0;
+                int half = recentOrders.size() / 2;
+                for (int i=0; i<half; i++) newestHalfSum += recentOrders.get(i).getQuantity();
+                for (int i=half; i<recentOrders.size(); i++) oldestHalfSum += recentOrders.get(i).getQuantity();
+                
+                double newestAvg = newestHalfSum / half;
+                double oldestAvg = oldestHalfSum / (recentOrders.size() - half);
+                
+                if (newestAvg > oldestAvg * 1.05) trend = "increasing";
+                else if (newestAvg < oldestAvg * 0.95) trend = "decreasing";
+            }
+        }
+        
+        Map<String, Object> response = new HashMap<>();
+        response.put("productId", productId != null ? productId : 0);
+        response.put("forecast", forecast);
+        response.put("trend", trend);
+        return response;
     }
 }

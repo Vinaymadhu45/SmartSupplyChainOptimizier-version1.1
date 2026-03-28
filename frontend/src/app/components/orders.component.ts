@@ -37,7 +37,7 @@ import { ApiService } from '../api.service';
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let o of displayOrders; trackBy: trackById">
+          <tr *ngFor="let o of orders; trackBy: trackById">
             <td>#{{ o.id }}</td>
             <td><strong>{{ o.customerName }}</strong></td>
             <td>{{ getProductName(o.productId) }}</td>
@@ -49,7 +49,7 @@ import { ApiService } from '../api.service';
             </td>
             <td>
               <select class="form-control" style="width:130px; display:inline-block; padding: 6px;" 
-                      [ngModel]="o.status" (ngModelChange)="updateStatus(o.id, $event)">
+                      [ngModel]="o.status" (ngModelChange)="updateStatus(o, $event)">
                 <option value="PENDING">PENDING</option>
                 <option value="PROCESSING">PROCESSING</option>
                 <option value="SHIPPED">SHIPPED</option>
@@ -57,14 +57,11 @@ import { ApiService } from '../api.service';
               </select>
             </td>
           </tr>
-          <tr *ngIf="displayOrders.length === 0">
+          <tr *ngIf="!orders || orders.length === 0">
             <td colspan="6" style="text-align:center; color:#999;">No orders found</td>
           </tr>
         </tbody>
       </table>
-      <div *ngIf="orders.length > 20" style="margin-top:10px; color:#7f8c8d; font-size:0.9em;">
-        Showing top 20 of {{ orders.length }} rows.
-      </div>
     </div>
   `,
   styles: [`
@@ -77,7 +74,6 @@ import { ApiService } from '../api.service';
 })
 export class OrdersComponent implements OnInit {
   orders: any[] = [];
-  displayOrders: any[] = [];
   products: any[] = [];
   newOrder: any = { customerName: '', productId: null, quantity: null, status: 'PENDING' };
   isLoading = true;
@@ -88,7 +84,10 @@ export class OrdersComponent implements OnInit {
   constructor(private api: ApiService) {}
 
   ngOnInit() {
-    this.api.getProducts().subscribe({ next: res => this.products = res });
+    this.api.getProducts().subscribe({ 
+       next: res => { this.products = (res && res.length > 0) ? res : []; },
+       error: err => console.log(err)
+    });
     this.loadOrders();
   }
 
@@ -97,12 +96,20 @@ export class OrdersComponent implements OnInit {
   loadOrders() {
     this.isLoading = true;
     this.api.getOrders().subscribe({
-      next: res => { this.orders = res; this.displayOrders = res.slice(0, 20); this.isLoading = false; },
-      error: err => { this.errorMessage = 'Failed to load orders'; this.isLoading = false; }
+      next: res => { 
+        this.orders = (res && res.length > 0) ? res : []; 
+        this.isLoading = false; 
+      },
+      error: err => { 
+        console.log(err);
+        this.errorMessage = 'Failed to load orders'; 
+        this.isLoading = false; 
+      }
     });
   }
 
   getProductName(id: number): string {
+    if (!this.products) return 'Unknown';
     const p = this.products.find(x => x.id === id);
     return p ? p.name : 'Unknown Product (' + id + ')';
   }
@@ -111,7 +118,7 @@ export class OrdersComponent implements OnInit {
     if(status === 'PROCESSING') return 'badge-blue';
     if(status === 'SHIPPED') return 'badge-orange';
     if(status === 'DELIVERED') return 'badge-green';
-    return 'badge-gray'; // PENDING or default
+    return 'badge-gray';
   }
 
   addOrder() {
@@ -119,30 +126,41 @@ export class OrdersComponent implements OnInit {
     if(!this.newOrder.customerName || !this.newOrder.productId || this.newOrder.quantity == null || this.newOrder.quantity <= 0) {
       this.errorMessage = 'Please provide valid customer details, select a product, and quantity > 0'; return;
     }
+    
+    // Front-end duplicate catch
+    if(this.orders.find(o => o.customerName.toLowerCase() === this.newOrder.customerName.toLowerCase() && o.productId === this.newOrder.productId && o.quantity === this.newOrder.quantity && o.status === 'PENDING')) {
+       this.errorMessage = 'Duplicate order detected. Ensure unique parameters before submitting.';
+       return;
+    }
+
     this.isSaving = true;
     this.api.addOrder(this.newOrder).subscribe({
-      next: () => {
+      next: (res) => {
         this.successMessage = 'Order placed successfully!';
+        if(!this.orders.find(o => o.id === res.id)) {
+            this.orders.push(res);
+        }
         this.newOrder = { customerName: '', productId: null, quantity: null, status: 'PENDING' };
-        this.loadOrders();
         this.isSaving = false;
         setTimeout(() => this.successMessage = '', 3000);
       },
       error: err => {
-        this.errorMessage = 'Failed to place order (Backend validation failed)';
+        console.log(err);
+        this.errorMessage = err.error && err.error.message ? err.error.message : 'Database duplicate collision aborted correctly.';
         this.isSaving = false;
       }
     });
   }
 
-  updateStatus(id: number, newStatus: string) {
-    this.api.updateOrderStatus(id, newStatus).subscribe({
-      next: () => {
+  updateStatus(order: any, newStatus: string) {
+    this.api.updateOrderStatus(order.id, newStatus).subscribe({
+      next: (res) => {
+        order.status = res.status; 
         this.successMessage = 'Order status updated!';
-        this.loadOrders();
         setTimeout(() => this.successMessage = '', 2000);
       },
       error: err => {
+        console.log(err);
         this.errorMessage = 'Failed to update order status';
       }
     });

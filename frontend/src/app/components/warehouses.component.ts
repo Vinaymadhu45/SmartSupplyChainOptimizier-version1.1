@@ -31,25 +31,21 @@ import { ApiService } from '../api.service';
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let w of displayWarehouses; trackBy: trackById">
+          <tr *ngFor="let w of warehouses; trackBy: trackById">
             <td>#{{ w.id }}</td>
             <td><strong>{{ w.name }}</strong></td>
             <td><span style="color:#7f8c8d">{{ w.latitude }}, {{ w.longitude }}</span></td>
           </tr>
-          <tr *ngIf="displayWarehouses.length === 0">
+          <tr *ngIf="!warehouses || warehouses.length === 0">
             <td colspan="3" style="text-align:center; color:#999;">No warehouses found</td>
           </tr>
         </tbody>
       </table>
-      <div *ngIf="warehouses.length > 20" style="margin-top:10px; color:#7f8c8d; font-size:0.9em;">
-        Showing top 20 of {{ warehouses.length }} rows.
-      </div>
     </div>
   `
 })
 export class WarehousesComponent implements OnInit {
   warehouses: any[] = [];
-  displayWarehouses: any[] = [];
   newWarehouse: any = { name: '', latitude: null, longitude: null };
   isLoading = true;
   isSaving = false;
@@ -65,8 +61,15 @@ export class WarehousesComponent implements OnInit {
   loadWarehouses() {
     this.isLoading = true;
     this.api.getWarehouses().subscribe({
-      next: res => { this.warehouses = res; this.displayWarehouses = res.slice(0, 20); this.isLoading = false; },
-      error: err => { this.errorMessage = 'Failed to load warehouses'; this.isLoading = false; }
+      next: res => { 
+        this.warehouses = (res && res.length > 0) ? res : []; 
+        this.isLoading = false; 
+      },
+      error: err => { 
+        console.log(err);
+        this.errorMessage = 'Failed to load warehouses'; 
+        this.isLoading = false; 
+      }
     });
   }
 
@@ -77,15 +80,16 @@ export class WarehousesComponent implements OnInit {
     }
     this.isSaving = true;
     this.api.addWarehouse(this.newWarehouse).subscribe({
-      next: () => {
+      next: (res) => {
         this.successMessage = 'Warehouse added successfully!';
+        this.warehouses.push(res);
         this.newWarehouse = { name: '', latitude: null, longitude: null };
-        this.loadWarehouses();
         this.isSaving = false;
         setTimeout(() => this.successMessage = '', 3000);
       },
       error: err => {
-        this.errorMessage = 'Failed to add warehouse (Backend validation failed)';
+        console.log(err);
+        this.errorMessage = 'Failed to add warehouse';
         this.isSaving = false;
       }
     });

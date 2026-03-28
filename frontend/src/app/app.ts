@@ -41,7 +41,7 @@ import { CommonModule } from '@angular/common';
     .topbar h2 { margin: 0; color: #2c3e50; font-size: 1.25rem; }
     .page-content { flex: 1; padding: 30px; overflow-y: auto; }
 
-    /* Global Utils - optimized */
+    ::ng-deep * { box-sizing: border-box; }
     ::ng-deep .card { background: white; border-radius: 8px; border: 1px solid #dde1e5; padding: 20px; margin-bottom: 20px; }
     ::ng-deep .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
     ::ng-deep .btn[disabled] { opacity: 0.6; cursor: not-allowed; }
@@ -60,6 +60,4 @@ import { CommonModule } from '@angular/common';
     ::ng-deep .alert-success { background: #eafaf1; color: #27ae60; border-left: 4px solid #27ae60; }
   `]
 })
-export class App {
-  title = 'frontend';
-}
+export class App {}

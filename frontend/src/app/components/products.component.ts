@@ -19,12 +19,6 @@ import { ApiService } from '../api.service';
         <button class="btn btn-primary" (click)="addProduct()" [disabled]="isSaving">{{ isSaving ? 'Saving...' : 'Add Product' }}</button>
       </div>
 
-      <div style="margin-bottom: 20px; display:flex; gap:10px;">
-        <input class="form-control" [(ngModel)]="searchQuery" placeholder="Search by name..." (keyup.enter)="search()" style="width: 300px;" />
-        <button class="btn btn-primary" (click)="search()" [disabled]="isLoading">Search</button>
-        <button class="btn btn-primary" style="background:#7f8c8d" (click)="loadProducts()" [disabled]="isLoading">Clear</button>
-      </div>
-
       <div *ngIf="isLoading" style="color:#7f8c8d; margin-bottom:10px;">Loading products...</div>
       
       <table class="table" *ngIf="!isLoading">
@@ -36,27 +30,22 @@ import { ApiService } from '../api.service';
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let p of displayProducts; trackBy: trackById">
+          <tr *ngFor="let p of products; trackBy: trackById">
             <td>#{{ p.id }}</td>
             <td>{{ p.name }}</td>
             <td>\${{ p.price | number:'1.2-2' }}</td>
           </tr>
-          <tr *ngIf="displayProducts.length === 0">
+          <tr *ngIf="!products || products.length === 0">
             <td colspan="3" style="text-align:center; color:#999;">No products found</td>
           </tr>
         </tbody>
       </table>
-      <div *ngIf="products.length > 20" style="margin-top:10px; color:#7f8c8d; font-size:0.9em;">
-        Showing top 20 of {{ products.length }} rows.
-      </div>
     </div>
   `
 })
 export class ProductsComponent implements OnInit {
   products: any[] = [];
-  displayProducts: any[] = [];
   newProduct: any = { name: '', price: null };
-  searchQuery = '';
   isLoading = true;
   isSaving = false;
   errorMessage = '';
@@ -70,19 +59,16 @@ export class ProductsComponent implements OnInit {
 
   loadProducts() {
     this.isLoading = true;
-    this.searchQuery = '';
     this.api.getProducts().subscribe({
-      next: res => { this.products = res; this.displayProducts = res.slice(0, 20); this.isLoading = false; },
-      error: err => { this.errorMessage = 'Failed to load products'; this.isLoading = false; }
-    });
-  }
-
-  search() {
-    if(!this.searchQuery.trim()) { this.loadProducts(); return; }
-    this.isLoading = true;
-    this.api.searchProducts(this.searchQuery).subscribe({
-      next: res => { this.products = res; this.displayProducts = res.slice(0, 20); this.isLoading = false; },
-      error: err => { this.errorMessage = 'Search failed'; this.isLoading = false; }
+      next: res => { 
+        this.products = (res && res.length > 0) ? res : []; 
+        this.isLoading = false; 
+      },
+      error: err => { 
+        console.log(err);
+        this.errorMessage = 'Failed to load products'; 
+        this.isLoading = false; 
+      }
     });
   }
 
@@ -91,17 +77,26 @@ export class ProductsComponent implements OnInit {
     if(!this.newProduct.name || this.newProduct.price == null || this.newProduct.price <= 0) {
       this.errorMessage = 'Please provide a valid name and positive price'; return;
     }
+
+    if (this.products.find(p => p.name.toLowerCase() === this.newProduct.name.toLowerCase())) {
+        this.errorMessage = 'Validation Failed: A Product with this exact name already exists locally.';
+        return;
+    }
+
     this.isSaving = true;
     this.api.addProduct(this.newProduct).subscribe({
-      next: () => {
+      next: (res) => {
         this.successMessage = 'Product added successfully!';
+        if (!this.products.find(p => p.id === res.id)) {
+            this.products.push(res); 
+        }
         this.newProduct = { name: '', price: null };
-        this.loadProducts();
         this.isSaving = false;
         setTimeout(() => this.successMessage = '', 3000);
       },
       error: err => {
-        this.errorMessage = 'Failed to add product (Backend validation failed)';
+        console.log(err);
+        this.errorMessage = err.error && err.error.message ? err.error.message : 'Database duplicate collision aborted correctly.';
         this.isSaving = false;
       }
     });
