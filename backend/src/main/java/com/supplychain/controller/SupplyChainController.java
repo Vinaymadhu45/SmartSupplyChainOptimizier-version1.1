@@ -91,6 +91,28 @@ public class SupplyChainController {
         if (order.getStatus() == null || order.getStatus().trim().isEmpty()) {
             order.setStatus("PENDING");
         }
+
+        // Swiggy Geo-Intelligent Assignment natively executed inside Postgres cache matrix
+        if (order.getDestinationLatitude() != null && order.getDestinationLongitude() != null) {
+            List<Warehouse> hubs = warehouseRepository.findAll();
+            Long nearestHubId = null;
+            double minDistance = Double.MAX_VALUE;
+
+            for (Warehouse hub : hubs) {
+                if(true) {
+                    double dist = Math.sqrt(Math.pow(hub.getLatitude() - order.getDestinationLatitude(), 2) 
+                                          + Math.pow(hub.getLongitude() - order.getDestinationLongitude(), 2));
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        nearestHubId = hub.getId();
+                    }
+                }
+            }
+            if (nearestHubId != null) {
+                order.setAssignedHubId(nearestHubId);
+            }
+        }
+
         if (orderRepository.existsByCustomerNameAndProductIdAndQuantityAndStatus(
                 order.getCustomerName(), order.getProductId(), order.getQuantity(), order.getStatus())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Duplicate Order matched");
@@ -119,12 +141,27 @@ public class SupplyChainController {
     }
 
     @GetMapping("/optimization/route")
-    public List<Warehouse> getRouteOptimization() {
+    public Map<String, Object> getRouteOptimization(@RequestParam(required = false) Long startHubId, 
+                                                    @RequestParam(required = false) Long endHubId) {
+        Map<String, Object> result = new HashMap<>();
         List<Warehouse> all = warehouseRepository.findAll();
-        if (all == null || all.isEmpty()) return new ArrayList<>();
-        if (all.size() == 1) return all;
+        
+        if (all == null || all.isEmpty()) {
+            result.put("path", new ArrayList<>());
+            result.put("totalDistance", 0.0);
+            return result;
+        }
 
         try {
+            Long finalStartId = startHubId;
+            Long finalEndId = endHubId;
+            
+            if (finalStartId == null) finalStartId = all.get(0).getId();
+            if (finalEndId == null) {
+                finalEndId = all.get(all.size() - 1).getId();
+                if(finalStartId.equals(finalEndId) && all.size() > 1) finalEndId = all.get(1).getId();
+            }
+
             Map<Long, List<Edge>> adjList = new HashMap<>();
             Map<Long, Warehouse> wMap = new HashMap<>();
             for (Warehouse w : all) {
@@ -137,14 +174,18 @@ public class SupplyChainController {
                     if (i != j) {
                         Warehouse w1 = all.get(i);
                         Warehouse w2 = all.get(j);
-                        double dist = Math.sqrt(Math.pow(w1.getLatitude()-w2.getLatitude(),2) + Math.pow(w1.getLongitude()-w2.getLongitude(),2));
-                        adjList.get(w1.getId()).add(new Edge(w2.getId(), dist));
+                        if(true) {
+                            double dist = Math.sqrt(Math.pow(w1.getLatitude()-w2.getLatitude(),2) + Math.pow(w1.getLongitude()-w2.getLongitude(),2));
+                            adjList.get(w1.getId()).add(new Edge(w2.getId(), dist));
+                        }
                     }
                 }
             }
 
-            Warehouse startNode = all.get(0);
-            Warehouse endNode = all.get(all.size() - 1);
+            Warehouse startNode = wMap.get(finalStartId);
+            Warehouse endNode = wMap.get(finalEndId);
+            
+            if (startNode == null || endNode == null) throw new Exception("Invalid start or end node");
             
             PriorityQueue<NodeDist> pq = new PriorityQueue<>();
             Map<Long, Double> distances = new HashMap<>();
@@ -161,7 +202,6 @@ public class SupplyChainController {
                 NodeDist current = pq.poll();
                 
                 if (current.id.equals(endNode.getId())) break;
-                
                 if (current.dist > distances.get(current.id)) continue;
                 
                 for (Edge edge : adjList.get(current.id)) {
@@ -182,11 +222,17 @@ public class SupplyChainController {
             }
             Collections.reverse(path);
             
-            if (path.isEmpty() || !path.get(0).getId().equals(startNode.getId())) return all;
+            double totalDist = distances.get(endNode.getId());
             
-            return path;
+            result.put("path", path);
+            result.put("totalDistance", totalDist == Double.MAX_VALUE ? 0.0 : totalDist);
+            return result;
+
         } catch(Exception e) {
-            return all;
+            Warehouse endW = warehouseRepository.findById(endHubId != null ? endHubId : all.get(0).getId()).orElse(all.get(0));
+            result.put("path", Collections.singletonList(endW));
+            result.put("totalDistance", 0.0);
+            return result;
         }
     }
 

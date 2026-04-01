@@ -9,34 +9,40 @@ import { ApiService } from '../api.service';
   imports: [CommonModule, FormsModule],
   template: `
     <div class="card">
-      <h3>Manage Products</h3>
+      <h3 style="margin-bottom:5px;">🏷️ Product Catalog</h3>
+      <p style="color:#7f8c8d; font-size:0.85rem; margin-bottom:20px;">Manage products linked to supply chain orders</p>
+
       <div *ngIf="errorMessage" class="alert alert-danger">{{ errorMessage }}</div>
       <div *ngIf="successMessage" class="alert alert-success">{{ successMessage }}</div>
 
-      <div class="form-group" style="display:flex; gap:10px; margin-bottom:20px;">
-        <input class="form-control" [(ngModel)]="newProduct.name" placeholder="Product Name" />
-        <input class="form-control" type="number" [(ngModel)]="newProduct.price" placeholder="Price" />
-        <button class="btn btn-primary" (click)="addProduct()" [disabled]="isSaving">{{ isSaving ? 'Saving...' : 'Add Product' }}</button>
+      <div style="background:#f9fafb; border:1px solid #e8ecef; border-radius:8px; padding:16px; margin-bottom:20px;">
+        <div style="display:grid; grid-template-columns:2fr 1fr auto; gap:10px; align-items:center;">
+          <input id="prod-name" class="form-control" [(ngModel)]="newProduct.name" placeholder="Product Name (unique)" />
+          <input id="prod-price" class="form-control" type="number" [(ngModel)]="newProduct.price" placeholder="Price ($)" min="0.01" step="0.01" />
+          <button id="prod-add-btn" class="btn btn-primary" (click)="addProduct()" [disabled]="isSaving">
+            {{ isSaving ? 'Saving...' : '+ Add Product' }}
+          </button>
+        </div>
       </div>
 
-      <div *ngIf="isLoading" style="color:#7f8c8d; margin-bottom:10px;">Loading products...</div>
-      
+      <div *ngIf="isLoading" style="color:#7f8c8d; text-align:center; padding:20px;">Loading products...</div>
+
       <table class="table" *ngIf="!isLoading">
         <thead>
           <tr>
             <th>ID</th>
-            <th>Name</th>
-            <th>Price</th>
+            <th>Product Name</th>
+            <th>Unit Price</th>
           </tr>
         </thead>
         <tbody>
           <tr *ngFor="let p of products; trackBy: trackById">
-            <td>#{{ p.id }}</td>
-            <td>{{ p.name }}</td>
-            <td>\${{ p.price | number:'1.2-2' }}</td>
+            <td style="color:#95a5a6; font-size:0.85rem;">#{{ p.id }}</td>
+            <td><strong>{{ p.name }}</strong></td>
+            <td style="color:#27ae60; font-weight:bold;">\${{ p.price | number:'1.2-2' }}</td>
           </tr>
-          <tr *ngIf="!products || products.length === 0">
-            <td colspan="3" style="text-align:center; color:#999;">No products found</td>
+          <tr *ngIf="products.length === 0">
+            <td colspan="3" style="text-align:center; color:#bdc3c7; padding:30px;">No products yet. Add your first product!</td>
           </tr>
         </tbody>
       </table>
@@ -55,48 +61,37 @@ export class ProductsComponent implements OnInit {
 
   ngOnInit() { this.loadProducts(); }
 
-  trackById(index: number, item: any) { return item.id; }
+  trackById(_: number, item: any) { return item.id; }
 
   loadProducts() {
     this.isLoading = true;
     this.api.getProducts().subscribe({
-      next: res => { 
-        this.products = (res && res.length > 0) ? res : []; 
-        this.isLoading = false; 
-      },
-      error: err => { 
-        console.log(err);
-        this.errorMessage = 'Failed to load products'; 
-        this.isLoading = false; 
-      }
+      next: res => { this.products = res || []; this.isLoading = false; },
+      error: () => { this.errorMessage = 'Failed to load products'; this.isLoading = false; }
     });
   }
 
   addProduct() {
     this.errorMessage = ''; this.successMessage = '';
-    if(!this.newProduct.name || this.newProduct.price == null || this.newProduct.price <= 0) {
-      this.errorMessage = 'Please provide a valid name and positive price'; return;
-    }
+    if (!this.newProduct.name?.trim()) { this.errorMessage = 'Product name is required'; return; }
+    if (this.newProduct.price == null || this.newProduct.price <= 0) { this.errorMessage = 'Price must be greater than 0'; return; }
 
+    // Frontend duplicate check
     if (this.products.find(p => p.name.toLowerCase() === this.newProduct.name.toLowerCase())) {
-        this.errorMessage = 'Validation Failed: A Product with this exact name already exists locally.';
-        return;
+      this.errorMessage = `A product named "${this.newProduct.name}" already exists`; return;
     }
 
     this.isSaving = true;
     this.api.addProduct(this.newProduct).subscribe({
       next: (res) => {
-        this.successMessage = 'Product added successfully!';
-        if (!this.products.find(p => p.id === res.id)) {
-            this.products.push(res); 
-        }
+        this.successMessage = `✅ Product "${res.name}" added!`;
+        if (!this.products.find(p => p.id === res.id)) this.products.push(res);
         this.newProduct = { name: '', price: null };
         this.isSaving = false;
         setTimeout(() => this.successMessage = '', 3000);
       },
       error: err => {
-        console.log(err);
-        this.errorMessage = err.error && err.error.message ? err.error.message : 'Database duplicate collision aborted correctly.';
+        this.errorMessage = err.error?.message || 'Failed to add product (may be a duplicate)';
         this.isSaving = false;
       }
     });
